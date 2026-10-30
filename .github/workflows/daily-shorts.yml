@@ -35,35 +35,32 @@ jobs:
           import json
 
           prompt = """
-          Choose an interesting topic yourself.
-          Write a finished English YouTube Shorts narration.
+          You are a professional YouTube Shorts creator.
+
+          Independently choose an interesting topic.
+          Write a finished English narration for a YouTube Short.
 
           Requirements:
           - 90 to 110 words.
           - Approximately 40 seconds.
-          - Strong opening hook.
-          - Natural spoken English.
+          - Start with a powerful hook.
+          - Natural conversational English.
           - Interesting and factually responsible.
-          - A memorable ending.
-          - No title, headings, outline, notes, drafts,
-            explanations or editing instructions.
+          - End with a memorable conclusion.
+          - No title, headings, outline, notes or explanations.
+          - Do not describe your writing process.
           - Output ONLY the final narration.
           """
 
           request = {
-              "systemInstruction": {
-                  "parts": [{
-                      "text": "You are a professional Shorts narrator. Output only the final narration, never your reasoning or writing process."
-                  }]
-              },
               "contents": [{
+                  "role": "user",
                   "parts": [{"text": prompt}]
               }],
               "generationConfig": {
-                  "temperature": 0.7,
                   "maxOutputTokens": 1200,
                   "thinkingConfig": {
-                      "thinkingLevel": "MINIMAL"
+                      "thinkingLevel": "low"
                   }
               }
           }
@@ -95,7 +92,7 @@ jobs:
           candidates = data.get("candidates", [])
 
           if not candidates:
-              print("Gemini returned no candidates.")
+              print("No Gemini candidates returned.")
               print(json.dumps(data, ensure_ascii=False)[:3000])
               sys.exit(1)
 
@@ -121,7 +118,7 @@ jobs:
           with open("script.txt", "w", encoding="utf-8") as f:
               f.write(script)
 
-          print("SUCCESS: Script generated.")
+          print("SUCCESS: English script generated.")
           print("Word count:", len(words))
           print(script)
           PY
@@ -200,8 +197,6 @@ jobs:
               s = int(seconds % 60)
               ms = int((seconds - int(seconds)) * 1000)
               return f"{h:02}:{m:02}:{s:02},{ms:03}"
-
-          total = len(words)
 
           with open("captions.srt", "w", encoding="utf-8") as f:
               for i, chunk in enumerate(chunks):
