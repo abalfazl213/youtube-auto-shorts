@@ -32,84 +32,243 @@ jobs:
           set -e
 
           cat > prompt.txt <<'EOF'
-          You are an expert YouTube Shorts storyteller and producer.
+          You are a professional YouTube Shorts documentary writer,
+          creative director and storytelling expert.
 
-          Independently choose one fascinating, surprising, accurate
-          and emotionally engaging topic for an English YouTube Short.
+          Independently discover and choose one fascinating topic.
+          Do not ask the user for an idea.
 
-          Create a professional documentary-style narration.
+          Choose topics with strong viewer appeal:
+          - Strange but true facts
+          - Hidden stories behind ordinary things
+          - Science and nature mysteries
+          - Historical events
+          - Human psychology
+          - Space and the universe
+          - Surprising real-world discoveries
 
-          Requirements:
-          - 55 to 65 spoken English words.
-          - A powerful opening hook.
-          - Natural conversational English.
-          - Calm, meaningful and impactful storytelling.
-          - A satisfying ending.
-          - No unnecessary introductions.
-          - Avoid unsupported claims.
+          Avoid generic motivational content and overused topics.
+
+          Write a compelling documentary-style narration.
+
+          STRICT REQUIREMENTS:
+          - Exactly 55 to 65 spoken English words.
+          - Start with a powerful curiosity-driven hook.
+          - Every sentence must add useful information.
+          - Use natural, clear conversational English.
+          - Calm, deep, meaningful storytelling.
+          - Build curiosity throughout the narration.
+          - End with a memorable final thought.
+          - No greetings or unnecessary introductions.
+          - Never invent facts or present speculation as fact.
 
           Create exactly 5 visual scenes in chronological order.
 
-          Each scene must have a specific Pixabay video search query
-          matching its corresponding narration.
+          Scene requirements:
+          - Each scene must visually match its narration segment.
+          - Use specific realistic footage search phrases.
+          - Prefer concrete subjects, actions and environments.
+          - Avoid vague queries such as "beautiful background".
+          - Avoid repeating the same visual idea.
+          - Make queries suitable for Pixabay stock videos.
 
-          Return ONLY valid JSON:
+          Return ONLY valid JSON in this exact structure:
 
           {
             "title": "Short title",
             "narration": "Complete narration",
             "scenes": [
-              {"query": "specific footage search"},
-              {"query": "specific footage search"},
-              {"query": "specific footage search"},
-              {"query": "specific footage search"},
-              {"query": "specific footage search"}
+              {"query": "specific video search query"},
+              {"query": "specific video search query"},
+              {"query": "specific video search query"},
+              {"query": "specific video search query"},
+              {"query": "specific video search query"}
             ]
           }
           EOF
 
-          jq -n --rawfile prompt prompt.txt '{
-            contents: [{parts: [{text: $prompt}]}],
-            generationConfig: {
-              responseMimeType: "application/json",
-              temperature: 0.7,
-              maxOutputTokens: 4096
-            }
-          }' > request.json
-
-          curl -fsS \
-            --retry 5 \
-            --retry-all-errors \
-            --retry-delay 10 \
-            --max-time 180 \
-            -H "Content-Type: application/json" \
-            -H "x-goog-api-key: $GEMINI_API_KEY" \
-            -d @request.json \
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent" \
-            -o response.json
-
           python - <<'PY'
+          import os
           import json
+          import time
+          import requests
 
-          with open("response.json", encoding="utf-8") as f:
-              data = json.load(f)
+          API_KEY = os.environ["GEMINI_API_KEY"]
+          MODEL = "gemini-3.8-flash"
 
-          parts = data["candidates"][0]["content"]["parts"]
-          result = json.loads("".join(
-              p["text"] for p in parts if "text" in p
-          ))
+          with open("prompt.txt", encoding="utf-8") as f:
+              prompt = f.read()
 
-          assert len(result["scenes"]) == 5
-          assert 55 <= len(result["narration"].split()) <= 65
+          url = (
+              "https://generativelanguage.googleapis.com/"
+              f"v1beta/models/{MODEL}:generateContent"
+          )
+
+          payload = {
+              "contents": [
+                  {"parts": [{"text": prompt}]}
+              ],
+              "generationConfig": {
+                  "responseMimeType": "application/json",
+                  "temperature": 0.7,
+                  "maxOutputTokens": 4096
+              }
+          }
+
+          session = requests.Session()
+          session.headers.update({
+              "Content-Type": "application/json",
+              "x-goog-api-key": API_KEY
+          })
+
+          response = None
+
+          for attempt in range(1, 4):
+              try:
+                  print(f"Gemini request: attempt {attempt}/3")
+
+                  response = session.post(
+                      url,
+                      json=payload,
+                      timeout=(15, 75)
+                  )
+
+                  if response.status_code == 200:
+                      break
+
+                  message = response.text[:3000]
+                  print("Gemini HTTP status:", response.status_code)
+
+                  if response.status_code in (401, 403, 400):
+                      raise RuntimeError(
+                          "Gemini rejected the request: " + message
+                      )
+
+                  if response.status_code == 429:
+                      lower = message.lower()
+
+                      daily_quota = any(term in lower for term in [
+                          "per_day",
+                          "perday",
+                          "daily_limit",
+                          "daily quota",
+                          "limit: 0"
+                      ])
+
+                      if daily_quota:
+                          raise RuntimeError(
+                              "Gemini daily quota appears exhausted. "
+                              "Check Google AI Studio quota."
+                          )
+
+                      if attempt == 3:
+                          raise RuntimeError(
+                              "Gemini rate limit persisted after retries."
+                          )
+
+                      wait = 25
+                      print(f"Temporary rate limit. Waiting {wait}s.")
+                      time.sleep(wait)
+                      continue
+
+                  if response.status_code in (500, 502, 503, 504):
+                      if attempt == 3:
+                          raise RuntimeError(
+                              "Gemini server error after 3 attempts: "
+                              + message
+                          )
+
+                      wait = 8 * attempt
+                      print(f"Temporary server error. Waiting {wait}s.")
+                      time.sleep(wait)
+                      continue
+
+                  response.raise_for_status()
+
+              except requests.exceptions.Timeout:
+                  print("Gemini request timed out.")
+
+                  if attempt == 3:
+                      raise RuntimeError(
+                          "Gemini timed out after 3 attempts."
+                      )
+
+                  wait = 8 * attempt
+                  print(f"Retrying after {wait}s.")
+                  time.sleep(wait)
+
+              except requests.exceptions.ConnectionError as exc:
+                  print("Connection problem:", str(exc)[:500])
+
+                  if attempt == 3:
+                      raise RuntimeError(
+                          "Could not connect to Gemini after 3 attempts."
+                      )
+
+                  wait = 8 * attempt
+                  time.sleep(wait)
+
+          if response is None or response.status_code != 200:
+              raise RuntimeError("Gemini did not return a successful response.")
+
+          try:
+              data = response.json()
+              parts = data["candidates"][0]["content"]["parts"]
+
+              raw = "".join(
+                  part["text"]
+                  for part in parts
+                  if "text" in part
+              )
+
+              result = json.loads(raw)
+
+          except Exception as exc:
+              raise RuntimeError(
+                  "Could not parse Gemini response: " + str(exc)
+              )
+
+          title = result.get("title", "").strip()
+          narration = result.get("narration", "").strip()
+          scenes = result.get("scenes", [])
+
+          if not title:
+              raise RuntimeError("Gemini returned an empty title.")
+
+          if not narration:
+              raise RuntimeError("Gemini returned empty narration.")
+
+          word_count = len(narration.split())
+
+          if not 55 <= word_count <= 65:
+              raise RuntimeError(
+                  f"Narration has {word_count} words; expected 55-65."
+              )
+
+          if not isinstance(scenes, list) or len(scenes) != 5:
+              raise RuntimeError("Gemini must return exactly 5 scenes.")
+
+          for index, scene in enumerate(scenes, 1):
+              if not isinstance(scene, dict):
+                  raise RuntimeError(f"Scene {index} is invalid.")
+
+              query = scene.get("query", "").strip()
+
+              if not query:
+                  raise RuntimeError(
+                      f"Scene {index} has an empty search query."
+                  )
 
           with open("plan.json", "w", encoding="utf-8") as f:
               json.dump(result, f, ensure_ascii=False, indent=2)
 
           with open("script.txt", "w", encoding="utf-8") as f:
-              f.write(result["narration"])
+              f.write(narration)
 
-          print("Title:", result["title"])
-          print("Narration generated successfully")
+          print("Title:", title)
+          print("Word count:", word_count)
+          print("Scenes:", len(scenes))
+          print("Narration generated successfully.")
           PY
 
       - name: Download relevant Pixabay scenes
@@ -129,7 +288,10 @@ jobs:
               plan = json.load(f)
 
           session = requests.Session()
-          session.headers.update({"User-Agent": "Mozilla/5.0"})
+          session.headers.update({
+              "User-Agent": "Mozilla/5.0",
+              "Referer": "https://pixabay.com/"
+          })
 
           for i, scene in enumerate(plan["scenes"], 1):
               query = scene["query"]
@@ -143,11 +305,13 @@ jobs:
                       "per_page": 10,
                       "safesearch": "true"
                   },
-                  timeout=45
+                  timeout=(20, 45)
               )
+
               response.raise_for_status()
 
               videos = response.json().get("hits", [])
+
               if not videos:
                   raise RuntimeError(
                       f"No Pixabay video found for: {query}"
@@ -157,11 +321,14 @@ jobs:
 
               for video in videos:
                   options = video.get("videos", {})
+
                   for quality in ("medium", "small", "large"):
                       url = options.get(quality, {}).get("url")
+
                       if url:
                           selected = url
                           break
+
                   if selected:
                       break
 
@@ -173,25 +340,31 @@ jobs:
               output = f"scenes/scene{i}.mp4"
               print("Downloading scene", i)
 
-              with session.get(
+              # curl is used because it worked in the earlier
+              # successful Pixabay download test.
+              import subprocess
+
+              subprocess.run([
+                  "curl",
+                  "-fL",
+                  "--retry", "2",
+                  "--retry-delay", "3",
+                  "--connect-timeout", "20",
+                  "--max-time", "120",
+                  "-A", "Mozilla/5.0",
+                  "-e", "https://pixabay.com/",
                   selected,
-                  stream=True,
-                  timeout=(30, 180)
-              ) as r:
-                  r.raise_for_status()
-                  with open(output, "wb") as f:
-                      for chunk in r.iter_content(1024 * 1024):
-                          if chunk:
-                              f.write(chunk)
+                  "-o", output
+              ], check=True)
 
               if os.path.getsize(output) < 10000:
                   raise RuntimeError(
-                      f"Downloaded scene {i} is too small"
+                      f"Downloaded scene {i} is too small."
                   )
 
-              time.sleep(1)
+              time.sleep(2)
 
-          print("All scenes downloaded successfully")
+          print("All scenes downloaded successfully.")
           PY
 
       - name: Generate male narration
@@ -247,12 +420,12 @@ jobs:
               )
 
           if not output:
-              raise RuntimeError("Subtitle file is empty")
+              raise RuntimeError("Subtitle file is empty.")
 
           with open("captions.srt", "w", encoding="utf-8") as f:
               f.write("\n".join(output))
 
-          print("Subtitle formatting completed")
+          print("Subtitle formatting completed.")
           PY
 
       - name: Create five-scene video
@@ -273,6 +446,7 @@ jobs:
                   "-of", "default=noprint_wrappers=1:nokey=1",
                   path
               ], text=True)
+
               return float(result.strip())
 
           total = duration("voice.mp3")
@@ -315,7 +489,7 @@ jobs:
               "joined.mp4"
           ], check=True)
 
-          print("Video scenes joined")
+          print("Video scenes joined.")
           print("Voice duration:", round(total, 2))
           PY
 
