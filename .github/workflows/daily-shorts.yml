@@ -1,0 +1,21 @@
+
+name: Daily YouTube Shorts
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 12 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  daily-run:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Start automation
+        run: |
+          echo "Daily Shorts automation started."
+          echo "Date: $(date -u)"
+          echo "Preparing the content pipeline..."
