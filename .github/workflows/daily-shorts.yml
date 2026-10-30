@@ -32,37 +32,44 @@ jobs:
           set -e
 
           cat > prompt.txt <<'EOF'
-          You are a professional YouTube Shorts producer.
+          You are an expert YouTube Shorts storyteller and producer.
 
-          Invent an interesting, surprising and accurate English-language
-          topic suitable for a 30-second YouTube Short.
+          Independently choose one fascinating, surprising, emotionally
+          engaging or thought-provoking topic for an English YouTube Short.
 
-          Create:
-          - A catchy title
-          - A natural narration of 65 to 75 English words
-          - Exactly 5 visual scenes in the correct order
-          - A Pixabay search query for each scene
+          Do not ask the user for a topic.
 
-          The narration must be engaging, factual, easy to understand,
-          and suitable for spoken English.
+          Create a professional short documentary-style narration.
 
-          Each visual query must describe real footage that visually
-          matches its corresponding narration.
+          Requirements:
+          - 55 to 65 spoken English words.
+          - A powerful opening hook.
+          - Natural conversational English.
+          - Calm, meaningful and impactful storytelling.
+          - A satisfying ending.
+          - No unnecessary introductions.
+          - Avoid fake facts and unsupported claims.
+          - Do not write instructions or production notes in narration.
 
-          Avoid generic queries such as "background", "technology"
-          or "interesting video".
+          Create exactly 5 visual scenes in chronological order.
+
+          Each scene must contain a specific Pixabay video search query
+          that visually matches the narration at that point.
+
+          Avoid vague searches such as "background", "technology"
+          or "beautiful video".
 
           Return ONLY valid JSON in this format:
 
           {
-            "title": "Video title",
+            "title": "Short title",
             "narration": "Complete spoken narration",
             "scenes": [
-              {"query": "specific footage search query"},
-              {"query": "specific footage search query"},
-              {"query": "specific footage search query"},
-              {"query": "specific footage search query"},
-              {"query": "specific footage search query"}
+              {"query": "specific visual footage search"},
+              {"query": "specific visual footage search"},
+              {"query": "specific visual footage search"},
+              {"query": "specific visual footage search"},
+              {"query": "specific visual footage search"}
             ]
           }
           EOF
@@ -94,10 +101,12 @@ jobs:
               data = json.load(f)
 
           parts = data["candidates"][0]["content"]["parts"]
-          result = json.loads("".join(p["text"] for p in parts if "text" in p))
+          result = json.loads("".join(
+              p["text"] for p in parts if "text" in p
+          ))
 
           assert len(result["scenes"]) == 5
-          assert 40 <= len(result["narration"].split()) <= 100
+          assert 55 <= len(result["narration"].split()) <= 65
 
           with open("plan.json", "w", encoding="utf-8") as f:
               json.dump(result, f, ensure_ascii=False, indent=2)
@@ -106,8 +115,8 @@ jobs:
               f.write(result["narration"])
 
           print("Title:", result["title"])
-          print("Scene count:", len(result["scenes"]))
-          print("Script generated successfully")
+          print("Word count:", len(result["narration"].split()))
+          print("Five scenes planned successfully")
           PY
 
       - name: Download relevant Pixabay scenes
@@ -127,9 +136,7 @@ jobs:
               plan = json.load(f)
 
           session = requests.Session()
-          session.headers.update({
-              "User-Agent": "Mozilla/5.0"
-          })
+          session.headers.update({"User-Agent": "Mozilla/5.0"})
 
           for i, scene in enumerate(plan["scenes"], 1):
               query = scene["query"]
@@ -149,7 +156,9 @@ jobs:
 
               videos = response.json().get("hits", [])
               if not videos:
-                  raise RuntimeError(f"No Pixabay video found for: {query}")
+                  raise RuntimeError(
+                      f"No Pixabay video found for: {query}"
+                  )
 
               selected = None
 
@@ -164,7 +173,9 @@ jobs:
                       break
 
               if not selected:
-                  raise RuntimeError(f"No video URL for scene {i}")
+                  raise RuntimeError(
+                      f"No video URL for scene {i}"
+                  )
 
               output = f"scenes/scene{i}.mp4"
               print("Downloading scene", i)
@@ -181,23 +192,80 @@ jobs:
                               f.write(chunk)
 
               if os.path.getsize(output) < 10000:
-                  raise RuntimeError(f"Downloaded scene {i} is too small")
+                  raise RuntimeError(
+                      f"Downloaded scene {i} is too small"
+                  )
 
               time.sleep(1)
 
-          print("All five scenes downloaded")
+          print("All scenes downloaded successfully")
           PY
 
-      - name: Generate English voice
+      - name: Generate deep male narration and timed subtitles
         run: |
           set -e
-          edge-tts \
-            --voice en-US-AriaNeural \
-            --rate=+5% \
-            --file script.txt \
-            --write-media voice.mp3
 
-      - name: Create synchronized scene video
+          edge-tts \
+            --voice en-US-ChristopherNeural \
+            --rate=-8% \
+            --pitch=-8Hz \
+            --file script.txt \
+            --write-media voice.mp3 \
+            --write-subtitles captions.srt
+
+          test -s voice.mp3
+          test -s captions.srt
+
+          echo "Male narration generated"
+          echo "Real speech subtitle timings generated"
+
+      - name: Prepare professional subtitles
+        run: |
+          set -e
+
+          python - <<'PY'
+          import re
+          import textwrap
+
+          with open("captions.srt", encoding="utf-8") as f:
+              content = f.read().strip()
+
+          blocks = re.split(r"\n\s*\n", content)
+          output = []
+
+          for block in blocks:
+              lines = block.strip().splitlines()
+
+              if len(lines) < 3:
+                  continue
+
+              number = lines[0].strip()
+              timestamp = lines[1].strip()
+              text = " ".join(lines[2:]).strip()
+
+              wrapped = textwrap.wrap(
+                  text,
+                  width=30,
+                  break_long_words=False,
+                  break_on_hyphens=False
+              )
+
+              output.append(
+                  number + "\n" +
+                  timestamp + "\n" +
+                  "\n".join(wrapped) + "\n"
+              )
+
+          if not output:
+              raise RuntimeError("Subtitle file is empty or invalid")
+
+          with open("captions.srt", "w", encoding="utf-8") as f:
+              f.write("\n".join(output))
+
+          print("Subtitle formatting completed")
+          PY
+
+      - name: Create five-scene video
         run: |
           set -e
 
@@ -208,7 +276,7 @@ jobs:
           with open("plan.json", encoding="utf-8") as f:
               plan = json.load(f)
 
-          def probe_duration(path):
+          def duration(path):
               result = subprocess.check_output([
                   "ffprobe", "-v", "error",
                   "-show_entries", "format=duration",
@@ -217,13 +285,12 @@ jobs:
               ], text=True)
               return float(result.strip())
 
-          total = probe_duration("voice.mp3")
-          scene_count = len(plan["scenes"])
-          segment = total / scene_count
+          total = duration("voice.mp3")
+          segment = total / len(plan["scenes"])
 
           files = []
 
-          for i in range(1, scene_count + 1):
+          for i in range(1, 6):
               source = f"scenes/scene{i}.mp4"
               output = f"part{i}.mp4"
 
@@ -251,40 +318,21 @@ jobs:
 
           subprocess.run([
               "ffmpeg", "-y",
-              "-f", "concat", "-safe", "0",
+              "-f", "concat",
+              "-safe", "0",
               "-i", "concat.txt",
               "-c", "copy",
               "joined.mp4"
           ], check=True)
 
-          words = plan["narration"].split()
-          chunks = [" ".join(words[i:i+7]) for i in range(0, len(words), 7)]
-
-          def stamp(seconds):
-              ms = int(seconds * 1000)
-              h, ms = divmod(ms, 3600000)
-              m, ms = divmod(ms, 60000)
-              s, ms = divmod(ms, 1000)
-              return f"{h:02}:{m:02}:{s:02},{ms:03}"
-
-          with open("captions.srt", "w", encoding="utf-8") as f:
-              for i, chunk in enumerate(chunks):
-                  start = total * i / len(chunks)
-                  end = total * (i + 1) / len(chunks)
-                  f.write(
-                      f"{i+1}\n"
-                      f"{stamp(start)} --> {stamp(end)}\n"
-                      f"{chunk}\n\n"
-                  )
-
-          print("Video duration:", round(total, 2), "seconds")
-          print("Subtitles created")
+          print("Visual scenes joined")
+          print("Voice duration:", round(total, 2), "seconds")
           PY
 
           ffmpeg -y \
             -i joined.mp4 \
             -i voice.mp3 \
-            -vf "subtitles=captions.srt:force_style='FontName=DejaVu Sans,FontSize=18,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=180'" \
+            -vf "subtitles=captions.srt:force_style='FontName=DejaVu Sans,FontSize=52,Bold=1,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=3,Shadow=1,Alignment=2,MarginL=90,MarginR=90,MarginV=250,WrapStyle=2'" \
             -map 0:v:0 \
             -map 1:a:0 \
             -c:v libx264 \
@@ -299,11 +347,14 @@ jobs:
       - name: Verify output
         run: |
           set -e
+
           test -s daily-short.mp4
+
           ffprobe -v error \
             -show_entries format=duration \
             -of default=noprint_wrappers=1:nokey=1 \
             daily-short.mp4
+
           ls -lh daily-short.mp4
 
       - name: Upload finished Short
