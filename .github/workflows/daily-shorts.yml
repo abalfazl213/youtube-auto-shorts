@@ -33,30 +33,43 @@ jobs:
 
           python - <<'PY'
           import json
+
           prompt = """
-          Create an original YouTube Shorts script in English.
-          Choose the topic yourself. Pick something surprising,
-          interesting, educational, mysterious, or useful.
-          Do not ask the user for a topic.
+          Choose an interesting topic yourself.
+          Write a finished English YouTube Shorts narration.
 
           Requirements:
-          - 35 to 50 seconds of narration.
-          - Strong hook in the first sentence.
-          - Simple natural spoken English.
-          - Keep viewers curious until the end.
-          - No intro, no outro, no headings.
-          - Output ONLY the narration text.
+          - 90 to 110 words.
+          - Approximately 40 seconds.
+          - Strong opening hook.
+          - Natural spoken English.
+          - Interesting and factually responsible.
+          - A memorable ending.
+          - No title, headings, outline, notes, drafts,
+            explanations or editing instructions.
+          - Output ONLY the final narration.
           """
-          with open("request.json", "w") as f:
-              json.dump({
-                  "contents": [{
-                      "parts": [{"text": prompt}]
-                  }],
-                  "generationConfig": {
-                      "temperature": 0.9,
-                      "maxOutputTokens": 700
+
+          request = {
+              "systemInstruction": {
+                  "parts": [{
+                      "text": "You are a professional Shorts narrator. Output only the final narration, never your reasoning or writing process."
+                  }]
+              },
+              "contents": [{
+                  "parts": [{"text": prompt}]
+              }],
+              "generationConfig": {
+                  "temperature": 0.7,
+                  "maxOutputTokens": 1200,
+                  "thinkingConfig": {
+                      "thinkingLevel": "MINIMAL"
                   }
-              }, f)
+              }
+          }
+
+          with open("request.json", "w") as f:
+              json.dump(request, f)
           PY
 
           curl --retry 5 \
@@ -73,35 +86,50 @@ jobs:
             -o response.json
 
           python - <<'PY'
-          import json, sys
+          import json
+          import sys
 
           with open("response.json", encoding="utf-8") as f:
               data = json.load(f)
 
-          parts = data.get("candidates", [{}])[0].get(
-              "content", {}
-          ).get("parts", [])
+          candidates = data.get("candidates", [])
 
-          script = "\n".join(
-              p.get("text", "") for p in parts
-              if p.get("text")
-          ).strip()
+          if not candidates:
+              print("Gemini returned no candidates.")
+              print(json.dumps(data, ensure_ascii=False)[:3000])
+              sys.exit(1)
 
-          if len(script.split()) < 20:
-              print("Gemini returned an empty or invalid script.")
-              print(json.dumps(data, ensure_ascii=False)[:2000])
+          candidate = candidates[0]
+          parts = candidate.get("content", {}).get("parts", [])
+
+          texts = [
+              p["text"].strip()
+              for p in parts
+              if p.get("text") and not p.get("thought", False)
+          ]
+
+          script = "\n".join(texts).strip()
+          words = script.split()
+
+          if len(words) < 50:
+              print("Narration is too short.")
+              print("Word count:", len(words))
+              print("Finish reason:", candidate.get("finishReason"))
+              print("Response:", script)
               sys.exit(1)
 
           with open("script.txt", "w", encoding="utf-8") as f:
               f.write(script)
 
-          print("Script generated successfully.")
+          print("SUCCESS: Script generated.")
+          print("Word count:", len(words))
           print(script)
           PY
 
       - name: Generate AI voice
         run: |
           set -e
+
           edge-tts \
             --voice en-US-AriaNeural \
             --rate "+5%" \
@@ -114,7 +142,6 @@ jobs:
         run: |
           python - <<'PY'
           from PIL import Image, ImageDraw, ImageFont
-          import re
 
           W, H = 1080, 1920
           img = Image.new("RGB", (W, H))
@@ -141,8 +168,10 @@ jobs:
                   fill=(130, 150, 190)
               )
 
-          font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-          font = ImageFont.truetype(font_path, 75)
+          font = ImageFont.truetype(
+              "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+              75
+          )
 
           title = "DID YOU KNOW?"
           box = draw.textbbox((0, 0), title, font=font)
@@ -161,7 +190,8 @@ jobs:
               words = f.read().split()
 
           chunks = [
-              words[i:i+7] for i in range(0, len(words), 7)
+              words[i:i+7]
+              for i in range(0, len(words), 7)
           ]
 
           def stamp(seconds):
@@ -171,11 +201,13 @@ jobs:
               ms = int((seconds - int(seconds)) * 1000)
               return f"{h:02}:{m:02}:{s:02},{ms:03}"
 
+          total = len(words)
+
           with open("captions.srt", "w", encoding="utf-8") as f:
-              total = len(words)
               for i, chunk in enumerate(chunks):
-                  start = (i * total / len(chunks)) / total * 45
-                  end = ((i+1) * total / len(chunks)) / total * 45
+                  start = i * 45 / len(chunks)
+                  end = (i+1) * 45 / len(chunks)
+
                   f.write(
                       f"{i+1}\n"
                       f"{stamp(start)} --> {stamp(end)}\n"
