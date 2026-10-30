@@ -10,12 +10,35 @@ permissions:
   contents: read
 
 jobs:
-  daily-run:
+  generate:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Start automation
+      - name: Generate video idea and script
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
-          echo "Daily Shorts automation started."
-          echo "Date: $(date -u)"
-          echo "Preparing the content pipeline..."
+          set -e
+
+          curl -fsS \
+            -X POST \
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent" \
+            -H "Content-Type: application/json" \
+            -H "x-goog-api-key: ${GEMINI_API_KEY}" \
+            -d '{
+              "contents": [{
+                "parts": [{
+                  "text": "You are an expert English YouTube Shorts creator. Independently choose one fascinating, accurate and unusual fact for an English-speaking audience. Write an original 25-second YouTube Shorts script with a powerful 2-second hook, engaging narration, and a question at the end. Return only the title and narration. Avoid fake facts and copyrighted text."
+                }]
+              }]
+            }' > response.json
+
+          python3 - <<'PY'
+          import json
+          with open("response.json", encoding="utf-8") as f:
+              data = json.load(f)
+          text = data["candidates"][0]["content"]["parts"][0]["text"]
+          with open("script.txt", "w", encoding="utf-8") as f:
+              f.write(text)
+          print("SUCCESS: AI generated a script!")
+          print(text)
+          PY
