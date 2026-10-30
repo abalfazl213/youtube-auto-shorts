@@ -1,0 +1,42 @@
+
+name: Test Pixabay API
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Search Pixabay videos
+        env:
+          PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
+        run: |
+          set -e
+
+          curl -fsS --get \
+            "https://pixabay.com/api/videos/" \
+            --data-urlencode "key=$PIXABAY_API_KEY" \
+            --data-urlencode "q=space universe" \
+            --data-urlencode "per_page=5" \
+            --data-urlencode "safesearch=true" \
+            -o pixabay.json
+
+          python - <<'PY'
+          import json
+
+          with open("pixabay.json") as f:
+              data = json.load(f)
+
+          videos = data.get("hits", [])
+
+          print("Total results:", data.get("total"))
+          print("Videos found:", len(videos))
+
+          for video in videos:
+              print("Title/tags:", video.get("tags"))
+              print("Duration:", video.get("duration"), "seconds")
+              print("Video URL available:",
+                    bool(video.get("videos", {}).get("medium", {}).get("url")))
+          PY
