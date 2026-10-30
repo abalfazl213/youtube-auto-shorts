@@ -1,0 +1,322 @@
+
+name: Daily AI YouTube Shorts
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 12 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  create-short:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fonts-dejavu-core
+          python -m pip install --upgrade pip
+          pip install edge-tts requests
+
+      - name: Generate video plan with Gemini
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          set -e
+
+          cat > prompt.txt <<'EOF'
+          You are a professional YouTube Shorts producer.
+
+          Invent an interesting, surprising and accurate English-language
+          topic suitable for a 30-second YouTube Short.
+
+          Create:
+          - A catchy title
+          - A natural narration of 65 to 75 English words
+          - Exactly 5 visual scenes in the correct order
+          - A Pixabay search query for each scene
+
+          The narration must be engaging, factual, easy to understand,
+          and suitable for spoken English.
+
+          Each visual query must describe real footage that visually
+          matches its corresponding narration.
+
+          Avoid generic queries such as "background", "technology"
+          or "interesting video".
+
+          Return ONLY valid JSON in this format:
+
+          {
+            "title": "Video title",
+            "narration": "Complete spoken narration",
+            "scenes": [
+              {"query": "specific footage search query"},
+              {"query": "specific footage search query"},
+              {"query": "specific footage search query"},
+              {"query": "specific footage search query"},
+              {"query": "specific footage search query"}
+            ]
+          }
+          EOF
+
+          jq -n --rawfile prompt prompt.txt '{
+            contents: [{parts: [{text: $prompt}]}],
+            generationConfig: {
+              responseMimeType: "application/json",
+              temperature: 0.7,
+              maxOutputTokens: 4096
+            }
+          }' > request.json
+
+          curl -fsS \
+            --retry 5 \
+            --retry-all-errors \
+            --retry-delay 10 \
+            --max-time 180 \
+            -H "Content-Type: application/json" \
+            -H "x-goog-api-key: $GEMINI_API_KEY" \
+            -d @request.json \
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent" \
+            -o response.json
+
+          python - <<'PY'
+          import json
+
+          with open("response.json", encoding="utf-8") as f:
+              data = json.load(f)
+
+          parts = data["candidates"][0]["content"]["parts"]
+          result = json.loads("".join(p["text"] for p in parts if "text" in p))
+
+          assert len(result["scenes"]) == 5
+          assert 40 <= len(result["narration"].split()) <= 100
+
+          with open("plan.json", "w", encoding="utf-8") as f:
+              json.dump(result, f, ensure_ascii=False, indent=2)
+
+          with open("script.txt", "w", encoding="utf-8") as f:
+              f.write(result["narration"])
+
+          print("Title:", result["title"])
+          print("Scene count:", len(result["scenes"]))
+          print("Script generated successfully")
+          PY
+
+      - name: Download relevant Pixabay scenes
+        env:
+          PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
+        run: |
+          set -e
+          mkdir -p scenes
+
+          python - <<'PY'
+          import json
+          import os
+          import requests
+          import time
+
+          with open("plan.json", encoding="utf-8") as f:
+              plan = json.load(f)
+
+          session = requests.Session()
+          session.headers.update({
+              "User-Agent": "Mozilla/5.0"
+          })
+
+          for i, scene in enumerate(plan["scenes"], 1):
+              query = scene["query"]
+              print(f"Searching scene {i}: {query}")
+
+              response = session.get(
+                  "https://pixabay.com/api/videos/",
+                  params={
+                      "key": os.environ["PIXABAY_API_KEY"],
+                      "q": query,
+                      "per_page": 10,
+                      "safesearch": "true"
+                  },
+                  timeout=45
+              )
+              response.raise_for_status()
+
+              videos = response.json().get("hits", [])
+              if not videos:
+                  raise RuntimeError(f"No Pixabay video found for: {query}")
+
+              selected = None
+
+              for video in videos:
+                  options = video.get("videos", {})
+                  for quality in ("medium", "small", "large"):
+                      url = options.get(quality, {}).get("url")
+                      if url:
+                          selected = url
+                          break
+                  if selected:
+                      break
+
+              if not selected:
+                  raise RuntimeError(f"No video URL for scene {i}")
+
+              output = f"scenes/scene{i}.mp4"
+              print("Downloading scene", i)
+
+              with session.get(
+                  selected,
+                  stream=True,
+                  timeout=(30, 180)
+              ) as r:
+                  r.raise_for_status()
+                  with open(output, "wb") as f:
+                      for chunk in r.iter_content(1024 * 1024):
+                          if chunk:
+                              f.write(chunk)
+
+              if os.path.getsize(output) < 10000:
+                  raise RuntimeError(f"Downloaded scene {i} is too small")
+
+              time.sleep(1)
+
+          print("All five scenes downloaded")
+          PY
+
+      - name: Generate English voice
+        run: |
+          set -e
+          edge-tts \
+            --voice en-US-AriaNeural \
+            --rate=+5% \
+            --file script.txt \
+            --write-media voice.mp3
+
+      - name: Create synchronized scene video
+        run: |
+          set -e
+
+          python - <<'PY'
+          import subprocess
+          import json
+          import re
+          import math
+
+          with open("plan.json", encoding="utf-8") as f:
+              plan = json.load(f)
+
+          def probe_duration(path):
+              result = subprocess.check_output([
+                  "ffprobe", "-v", "error",
+                  "-show_entries", "format=duration",
+                  "-of", "default=noprint_wrappers=1:nokey=1",
+                  path
+              ], text=True)
+              return float(result.strip())
+
+          total = probe_duration("voice.mp3")
+          scene_count = len(plan["scenes"])
+          segment = total / scene_count
+
+          files = []
+
+          for i in range(1, scene_count + 1):
+              source = f"scenes/scene{i}.mp4"
+              output = f"part{i}.mp4"
+
+              subprocess.run([
+                  "ffmpeg", "-y",
+                  "-stream_loop", "-1",
+                  "-i", source,
+                  "-t", str(segment),
+                  "-vf",
+                  "scale=1080:1920:force_original_aspect_ratio=increase,"
+                  "crop=1080:1920,setsar=1,fps=30",
+                  "-an",
+                  "-c:v", "libx264",
+                  "-preset", "veryfast",
+                  "-crf", "23",
+                  "-pix_fmt", "yuv420p",
+                  output
+              ], check=True)
+
+              files.append(output)
+
+          with open("concat.txt", "w") as f:
+              for path in files:
+                  f.write(f"file '{path}'\n")
+
+          subprocess.run([
+              "ffmpeg", "-y",
+              "-f", "concat", "-safe", "0",
+              "-i", "concat.txt",
+              "-c", "copy",
+              "joined.mp4"
+          ], check=True)
+
+          # Create readable subtitle chunks with approximate timing.
+          words = plan["narration"].split()
+          chunks = [" ".join(words[i:i+7]) for i in range(0, len(words), 7)]
+
+          def stamp(seconds):
+              ms = int(seconds * 1000)
+              h, ms = divmod(ms, 3600000)
+              m, ms = divmod(ms, 60000)
+              s, ms = divmod(ms, 1000)
+              return f"{h:02}:{m:02}:{s:02},{ms:03}"
+
+          with open("captions.srt", "w", encoding="utf-8") as f:
+              for i, chunk in enumerate(chunks):
+                  start = total * i / len(chunks)
+                  end = total * (i + 1) / len(chunks)
+                  f.write(
+                      f"{i+1}\n"
+                      f"{stamp(start)} --> {stamp(end)}\n"
+                      f"{chunk}\n\n"
+                  )
+
+          print("Video duration:", round(total, 2), "seconds")
+          print("Subtitles created")
+          PY
+
+          ffmpeg -y \
+            -i joined.mp4 \
+            -i voice.mp3 \
+            -vf "subtitles=captions.srt:force_style='FontName=DejaVu Sans,FontSize=18,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=180'" \
+            -map 0:v:0 \
+            -map 1:a:0 \
+            -c:v libx264 \
+            -preset veryfast \
+            -crf 23 \
+            -c:a aac \
+            -b:a 192k \
+            -shortest \
+            -movflags +faststart \
+            daily-short.mp4
+
+      - name: Verify output
+        run: |
+          set -e
+          test -s daily-short.mp4
+          ffprobe -v error \
+            -show_entries format=duration \
+            -of default=noprint_wrappers=1:nokey=1 \
+            daily-short.mp4
+          ls -lh daily-short.mp4
+
+      - name: Upload finished Short
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-youtube-short
+          path: |
+            daily-short.mp4
+            script.txt
+            voice.mp3
+            captions.srt
+            plan.json
+          retention-days: 7
