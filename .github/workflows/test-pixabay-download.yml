@@ -14,7 +14,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ffmpeg
 
-      - name: Search and download video
+      - name: Search Pixabay video
         env:
           PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
         run: |
@@ -30,7 +30,6 @@ jobs:
 
           python - <<'PY'
           import json
-          import urllib.request
 
           with open("pixabay.json") as f:
               data = json.load(f)
@@ -41,6 +40,7 @@ jobs:
               raise SystemExit("No videos found")
 
           selected = None
+          selected_quality = None
 
           for video in videos:
               options = video.get("videos", {})
@@ -48,6 +48,7 @@ jobs:
                   url = options.get(quality, {}).get("url")
                   if url:
                       selected = url
+                      selected_quality = quality
                       break
               if selected:
                   break
@@ -55,16 +56,37 @@ jobs:
           if not selected:
               raise SystemExit("No downloadable video URL found")
 
-          print("Downloading video...")
+          with open("video-url.txt", "w") as f:
+              f.write(selected)
 
-          urllib.request.urlretrieve(selected, "sample.mp4")
-
-          print("Download completed")
+          print("Video found")
+          print("Selected quality:", selected_quality)
           PY
+
+      - name: Download video
+        run: |
+          set -e
+
+          VIDEO_URL=$(cat video-url.txt)
+
+          curl -fL \
+            --retry 3 \
+            --retry-delay 2 \
+            --connect-timeout 30 \
+            --max-time 180 \
+            -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36" \
+            -e "https://pixabay.com/" \
+            "$VIDEO_URL" \
+            -o sample.mp4
+
+          test -s sample.mp4
+
+          echo "Download successful"
 
       - name: Check video
         run: |
           ls -lh sample.mp4
+
           ffprobe -v error \
             -show_entries format=duration \
             -of default=noprint_wrappers=1:nokey=1 \
