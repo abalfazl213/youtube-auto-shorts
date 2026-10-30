@@ -34,12 +34,10 @@ jobs:
           cat > prompt.txt <<'EOF'
           You are an expert YouTube Shorts storyteller and producer.
 
-          Independently choose one fascinating, surprising, emotionally
-          engaging or thought-provoking topic for an English YouTube Short.
+          Independently choose one fascinating, surprising, accurate
+          and emotionally engaging topic for an English YouTube Short.
 
-          Do not ask the user for a topic.
-
-          Create a professional short documentary-style narration.
+          Create a professional documentary-style narration.
 
           Requirements:
           - 55 to 65 spoken English words.
@@ -48,28 +46,24 @@ jobs:
           - Calm, meaningful and impactful storytelling.
           - A satisfying ending.
           - No unnecessary introductions.
-          - Avoid fake facts and unsupported claims.
-          - Do not write instructions or production notes in narration.
+          - Avoid unsupported claims.
 
           Create exactly 5 visual scenes in chronological order.
 
-          Each scene must contain a specific Pixabay video search query
-          that visually matches the narration at that point.
+          Each scene must have a specific Pixabay video search query
+          matching its corresponding narration.
 
-          Avoid vague searches such as "background", "technology"
-          or "beautiful video".
-
-          Return ONLY valid JSON in this format:
+          Return ONLY valid JSON:
 
           {
             "title": "Short title",
-            "narration": "Complete spoken narration",
+            "narration": "Complete narration",
             "scenes": [
-              {"query": "specific visual footage search"},
-              {"query": "specific visual footage search"},
-              {"query": "specific visual footage search"},
-              {"query": "specific visual footage search"},
-              {"query": "specific visual footage search"}
+              {"query": "specific footage search"},
+              {"query": "specific footage search"},
+              {"query": "specific footage search"},
+              {"query": "specific footage search"},
+              {"query": "specific footage search"}
             ]
           }
           EOF
@@ -115,8 +109,7 @@ jobs:
               f.write(result["narration"])
 
           print("Title:", result["title"])
-          print("Word count:", len(result["narration"].split()))
-          print("Five scenes planned successfully")
+          print("Narration generated successfully")
           PY
 
       - name: Download relevant Pixabay scenes
@@ -201,7 +194,7 @@ jobs:
           print("All scenes downloaded successfully")
           PY
 
-      - name: Generate deep male narration and timed subtitles
+      - name: Generate male narration
         run: |
           set -e
 
@@ -216,10 +209,7 @@ jobs:
           test -s voice.mp3
           test -s captions.srt
 
-          echo "Male narration generated"
-          echo "Real speech subtitle timings generated"
-
-      - name: Prepare professional subtitles
+      - name: Prepare readable subtitles
         run: |
           set -e
 
@@ -245,7 +235,7 @@ jobs:
 
               wrapped = textwrap.wrap(
                   text,
-                  width=30,
+                  width=24,
                   break_long_words=False,
                   break_on_hyphens=False
               )
@@ -257,7 +247,7 @@ jobs:
               )
 
           if not output:
-              raise RuntimeError("Subtitle file is empty or invalid")
+              raise RuntimeError("Subtitle file is empty")
 
           with open("captions.srt", "w", encoding="utf-8") as f:
               f.write("\n".join(output))
@@ -325,14 +315,14 @@ jobs:
               "joined.mp4"
           ], check=True)
 
-          print("Visual scenes joined")
-          print("Voice duration:", round(total, 2), "seconds")
+          print("Video scenes joined")
+          print("Voice duration:", round(total, 2))
           PY
 
           ffmpeg -y \
             -i joined.mp4 \
             -i voice.mp3 \
-            -vf "subtitles=captions.srt:force_style='FontName=DejaVu Sans,FontSize=52,Bold=1,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=3,Shadow=1,Alignment=2,MarginL=90,MarginR=90,MarginV=250,WrapStyle=2'" \
+            -vf "subtitles=captions.srt:force_style='FontName=DejaVu Sans,FontSize=38,Bold=1,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=3,Shadow=1,Alignment=2,MarginL=120,MarginR=120,MarginV=280,WrapStyle=2'" \
             -map 0:v:0 \
             -map 1:a:0 \
             -c:v libx264 \
@@ -347,7 +337,6 @@ jobs:
       - name: Verify output
         run: |
           set -e
-
           test -s daily-short.mp4
 
           ffprobe -v error \
