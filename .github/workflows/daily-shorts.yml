@@ -42,9 +42,11 @@ jobs:
           print(narration)
           PY
 
-      - name: Install free text to speech
+      - name: Install video tools
         run: |
-          python3 -m pip install --user edge-tts
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fonts-dejavu-core
+          python3 -m pip install --user edge-tts pillow --break-system-packages
 
       - name: Create English voice
         run: |
@@ -55,20 +57,100 @@ jobs:
           async def main():
               with open("script.txt", encoding="utf-8") as f:
                   text = f.read()
-
               voice = "en-US-AriaNeural"
-              communicate = edge_tts.Communicate(text, voice)
-              await communicate.save("voice.mp3")
-              print("Voice generated successfully!")
+              await edge_tts.Communicate(text, voice).save("voice.mp3")
 
           asyncio.run(main())
+          print("Voice created!")
           PY
 
-      - name: Save generated files
+      - name: Create animated video
+        run: |
+          cat > make_video.py <<'PY'
+          from PIL import Image, ImageDraw, ImageFont
+          import subprocess
+          import re
+
+          W, H = 1080, 1920
+          img = Image.new("RGB", (W, H))
+          pixels = img.load()
+
+          for y in range(H):
+              t = y / H
+              c = (int(5+8*t), int(12+10*t), int(29+25*t))
+              for x in range(W):
+                  pixels[x, y] = c
+
+          draw = ImageDraw.Draw(img)
+          for i in range(35):
+              x = (i * 173 + 91) % W
+              y = (i * 293 + 137) % H
+              r = 3 + (i % 5)
+              draw.ellipse((x-r, y-r, x+r, y+r),
+                           fill=(65, 91, 135))
+
+          font = ImageFont.truetype(
+              "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 76
+          )
+          title = "DID YOU KNOW?"
+          box = draw.textbbox((0, 0), title, font=font)
+          x = (W - (box[2]-box[0])) // 2
+          draw.text((x, 650), title, font=font, fill=(255, 205, 120))
+
+          img.save("background.png")
+
+          duration = float(subprocess.check_output([
+              "ffprobe", "-v", "error", "-show_entries",
+              "format=duration", "-of", "default=noprint_wrappers=1:nokey=1",
+              "voice.mp3"
+          ]).decode().strip())
+
+          with open("script.txt", encoding="utf-8") as f:
+              words = f.read().split()
+
+          chunks = [" ".join(words[i:i+6]) for i in range(0, len(words), 6)]
+
+          def stamp(seconds):
+              ms = int(seconds * 1000)
+              h, ms = divmod(ms, 3600000)
+              m, ms = divmod(ms, 60000)
+              s, ms = divmod(ms, 1000)
+              return f"{h:02}:{m:02}:{s:02},{ms:03}"
+
+          total = sum(len(c.split()) for c in chunks)
+          current = 0
+          with open("captions.srt", "w", encoding="utf-8") as f:
+              for i, chunk in enumerate(chunks, 1):
+                  start = duration * current / total
+                  current += len(chunk.split())
+                  end = duration * current / total
+                  f.write(f"{i}\n{stamp(start)} --> {stamp(end)}\n{chunk}\n\n")
+
+          subprocess.run([
+              "ffmpeg", "-y",
+              "-loop", "1", "-framerate", "30", "-i", "background.png",
+              "-i", "voice.mp3",
+              "-vf",
+              "scale=1080:1920,zoompan=z='min(zoom+0.0003,1.06)':d=1:s=1080x1920:fps=30,subtitles=captions.srt:force_style='FontName=DejaVu Sans,FontSize=20,PrimaryColour=&H00FFFFFF,OutlineColour=&H00101010,BorderStyle=1,Outline=3,Alignment=2,MarginV=280'",
+              "-t", str(duration),
+              "-c:v", "libx264", "-preset", "ultrafast",
+              "-pix_fmt", "yuv420p",
+              "-c:a", "aac", "-b:a", "128k",
+              "-shortest", "daily-short.mp4"
+          ], check=True)
+
+          print("VIDEO CREATED SUCCESSFULLY!")
+          PY
+
+          python3 make_video.py
+
+      - name: Save video and source files
         uses: actions/upload-artifact@v4
         with:
-          name: daily-short-audio
+          name: daily-youtube-short
           path: |
+            daily-short.mp4
             script.txt
             voice.mp3
+            captions.srt
           retention-days: 7
