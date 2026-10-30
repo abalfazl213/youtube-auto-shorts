@@ -10,65 +10,110 @@ permissions:
   contents: read
 
 jobs:
-  generate:
+  daily-run:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fonts-dejavu-core
+          python -m pip install --upgrade pip
+          pip install pillow edge-tts
+
       - name: Generate English script
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           set -e
 
-          curl -fsS \
+          python - <<'PY'
+          import json
+          prompt = """
+          Create an original YouTube Shorts script in English.
+          Choose the topic yourself. Pick something surprising,
+          interesting, educational, mysterious, or useful.
+          Do not ask the user for a topic.
+
+          Requirements:
+          - 35 to 50 seconds of narration.
+          - Strong hook in the first sentence.
+          - Simple natural spoken English.
+          - Keep viewers curious until the end.
+          - No intro, no outro, no headings.
+          - Output ONLY the narration text.
+          """
+          with open("request.json", "w") as f:
+              json.dump({
+                  "contents": [{
+                      "parts": [{"text": prompt}]
+                  }],
+                  "generationConfig": {
+                      "temperature": 0.9,
+                      "maxOutputTokens": 700
+                  }
+              }, f)
+          PY
+
+          curl --retry 5 \
+            --retry-all-errors \
+            --retry-delay 10 \
+            --retry-max-time 180 \
+            --fail-with-body \
+            -sS \
             -X POST \
             "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent" \
             -H "Content-Type: application/json" \
-            -H "x-goog-api-key: ${GEMINI_API_KEY}" \
-            -d '{
-              "contents": [{
-                "parts": [{
-                  "text": "Choose one fascinating and accurate unusual fact for an English YouTube Shorts audience. Write an original 20-30 second narration with a strong hook and engaging ending. Return only the narration, without title, labels or explanations."
-                }]
-              }]
-            }' > response.json
+            -H "x-goog-api-key: $GEMINI_API_KEY" \
+            -d @request.json \
+            -o response.json
 
-          python3 - <<'PY'
-          import json
-          data = json.load(open("response.json", encoding="utf-8"))
-          narration = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+          python - <<'PY'
+          import json, sys
+
+          with open("response.json", encoding="utf-8") as f:
+              data = json.load(f)
+
+          parts = data.get("candidates", [{}])[0].get(
+              "content", {}
+          ).get("parts", [])
+
+          script = "\n".join(
+              p.get("text", "") for p in parts
+              if p.get("text")
+          ).strip()
+
+          if len(script.split()) < 20:
+              print("Gemini returned an empty or invalid script.")
+              print(json.dumps(data, ensure_ascii=False)[:2000])
+              sys.exit(1)
+
           with open("script.txt", "w", encoding="utf-8") as f:
-              f.write(narration)
-          print(narration)
+              f.write(script)
+
+          print("Script generated successfully.")
+          print(script)
           PY
 
-      - name: Install video tools
+      - name: Generate AI voice
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg fonts-dejavu-core
-          python3 -m pip install --user edge-tts pillow --break-system-packages
+          set -e
+          edge-tts \
+            --voice en-US-AriaNeural \
+            --rate "+5%" \
+            --text "$(cat script.txt)" \
+            --write-media voice.mp3
 
-      - name: Create English voice
+          test -s voice.mp3
+
+      - name: Create background and captions
         run: |
-          python3 - <<'PY'
-          import asyncio
-          import edge_tts
-
-          async def main():
-              with open("script.txt", encoding="utf-8") as f:
-                  text = f.read()
-              voice = "en-US-AriaNeural"
-              await edge_tts.Communicate(text, voice).save("voice.mp3")
-
-          asyncio.run(main())
-          print("Voice created!")
-          PY
-
-      - name: Create animated video
-        run: |
-          cat > make_video.py <<'PY'
+          python - <<'PY'
           from PIL import Image, ImageDraw, ImageFont
-          import subprocess
           import re
 
           W, H = 1080, 1920
@@ -77,74 +122,94 @@ jobs:
 
           for y in range(H):
               t = y / H
-              c = (int(5+8*t), int(12+10*t), int(29+25*t))
+              color = (
+                  int(5 + 8*t),
+                  int(12 + 12*t),
+                  int(35 + 30*t)
+              )
               for x in range(W):
-                  pixels[x, y] = c
+                  pixels[x, y] = color
 
           draw = ImageDraw.Draw(img)
-          for i in range(35):
-              x = (i * 173 + 91) % W
-              y = (i * 293 + 137) % H
-              r = 3 + (i % 5)
-              draw.ellipse((x-r, y-r, x+r, y+r),
-                           fill=(65, 91, 135))
 
-          font = ImageFont.truetype(
-              "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 76
-          )
+          for i in range(90):
+              x = (i * 137) % W
+              y = (i * 251) % H
+              r = 2 if i % 3 else 4
+              draw.ellipse(
+                  (x-r, y-r, x+r, y+r),
+                  fill=(130, 150, 190)
+              )
+
+          font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+          font = ImageFont.truetype(font_path, 75)
+
           title = "DID YOU KNOW?"
           box = draw.textbbox((0, 0), title, font=font)
-          x = (W - (box[2]-box[0])) // 2
-          draw.text((x, 650), title, font=font, fill=(255, 205, 120))
+          tw = box[2] - box[0]
+
+          draw.text(
+              ((W-tw)//2, 780),
+              title,
+              font=font,
+              fill=(255, 190, 110)
+          )
 
           img.save("background.png")
-
-          duration = float(subprocess.check_output([
-              "ffprobe", "-v", "error", "-show_entries",
-              "format=duration", "-of", "default=noprint_wrappers=1:nokey=1",
-              "voice.mp3"
-          ]).decode().strip())
 
           with open("script.txt", encoding="utf-8") as f:
               words = f.read().split()
 
-          chunks = [" ".join(words[i:i+6]) for i in range(0, len(words), 6)]
+          chunks = [
+              words[i:i+7] for i in range(0, len(words), 7)
+          ]
 
           def stamp(seconds):
-              ms = int(seconds * 1000)
-              h, ms = divmod(ms, 3600000)
-              m, ms = divmod(ms, 60000)
-              s, ms = divmod(ms, 1000)
+              h = int(seconds // 3600)
+              m = int(seconds % 3600 // 60)
+              s = int(seconds % 60)
+              ms = int((seconds - int(seconds)) * 1000)
               return f"{h:02}:{m:02}:{s:02},{ms:03}"
 
-          total = sum(len(c.split()) for c in chunks)
-          current = 0
           with open("captions.srt", "w", encoding="utf-8") as f:
-              for i, chunk in enumerate(chunks, 1):
-                  start = duration * current / total
-                  current += len(chunk.split())
-                  end = duration * current / total
-                  f.write(f"{i}\n{stamp(start)} --> {stamp(end)}\n{chunk}\n\n")
-
-          subprocess.run([
-              "ffmpeg", "-y",
-              "-loop", "1", "-framerate", "30", "-i", "background.png",
-              "-i", "voice.mp3",
-              "-vf",
-              "scale=1080:1920,zoompan=z='min(zoom+0.0003,1.06)':d=1:s=1080x1920:fps=30,subtitles=captions.srt:force_style='FontName=DejaVu Sans,FontSize=20,PrimaryColour=&H00FFFFFF,OutlineColour=&H00101010,BorderStyle=1,Outline=3,Alignment=2,MarginV=280'",
-              "-t", str(duration),
-              "-c:v", "libx264", "-preset", "ultrafast",
-              "-pix_fmt", "yuv420p",
-              "-c:a", "aac", "-b:a", "128k",
-              "-shortest", "daily-short.mp4"
-          ], check=True)
-
-          print("VIDEO CREATED SUCCESSFULLY!")
+              total = len(words)
+              for i, chunk in enumerate(chunks):
+                  start = (i * total / len(chunks)) / total * 45
+                  end = ((i+1) * total / len(chunks)) / total * 45
+                  f.write(
+                      f"{i+1}\n"
+                      f"{stamp(start)} --> {stamp(end)}\n"
+                      f"{' '.join(chunk)}\n\n"
+                  )
           PY
 
-          python3 make_video.py
+      - name: Render YouTube Short
+        run: |
+          set -e
 
-      - name: Save video and source files
+          DURATION=$(ffprobe -v error \
+            -show_entries format=duration \
+            -of default=noprint_wrappers=1:nokey=1 voice.mp3)
+
+          ffmpeg -y \
+            -loop 1 \
+            -framerate 30 \
+            -i background.png \
+            -i voice.mp3 \
+            -vf "scale=1080:1920,subtitles=captions.srt:force_style='FontName=DejaVu Sans,FontSize=20,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=260'" \
+            -t "$DURATION" \
+            -r 30 \
+            -c:v libx264 \
+            -preset veryfast \
+            -pix_fmt yuv420p \
+            -c:a aac \
+            -b:a 192k \
+            -shortest \
+            daily-short.mp4
+
+          test -s daily-short.mp4
+
+      - name: Save generated files
         uses: actions/upload-artifact@v4
         with:
           name: daily-youtube-short
