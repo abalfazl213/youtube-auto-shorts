@@ -12,8 +12,9 @@ permissions:
 jobs:
   generate:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Generate video idea and script
+      - name: Generate English script
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
@@ -27,18 +28,47 @@ jobs:
             -d '{
               "contents": [{
                 "parts": [{
-                  "text": "You are an expert English YouTube Shorts creator. Independently choose one fascinating, accurate and unusual fact for an English-speaking audience. Write an original 25-second YouTube Shorts script with a powerful 2-second hook, engaging narration, and a question at the end. Return only the title and narration. Avoid fake facts and copyrighted text."
+                  "text": "Choose one fascinating and accurate unusual fact for an English YouTube Shorts audience. Write an original 20-30 second narration with a strong hook and engaging ending. Return only the narration, without title, labels or explanations."
                 }]
               }]
             }' > response.json
 
           python3 - <<'PY'
           import json
-          with open("response.json", encoding="utf-8") as f:
-              data = json.load(f)
-          text = data["candidates"][0]["content"]["parts"][0]["text"]
+          data = json.load(open("response.json", encoding="utf-8"))
+          narration = data["candidates"][0]["content"]["parts"][0]["text"].strip()
           with open("script.txt", "w", encoding="utf-8") as f:
-              f.write(text)
-          print("SUCCESS: AI generated a script!")
-          print(text)
+              f.write(narration)
+          print(narration)
           PY
+
+      - name: Install free text to speech
+        run: |
+          python3 -m pip install --user edge-tts
+
+      - name: Create English voice
+        run: |
+          python3 - <<'PY'
+          import asyncio
+          import edge_tts
+
+          async def main():
+              with open("script.txt", encoding="utf-8") as f:
+                  text = f.read()
+
+              voice = "en-US-AriaNeural"
+              communicate = edge_tts.Communicate(text, voice)
+              await communicate.save("voice.mp3")
+              print("Voice generated successfully!")
+
+          asyncio.run(main())
+          PY
+
+      - name: Save generated files
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-short-audio
+          path: |
+            script.txt
+            voice.mp3
+          retention-days: 7
