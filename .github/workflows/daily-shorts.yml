@@ -35,44 +35,45 @@ jobs:
           You are a professional YouTube Shorts documentary writer,
           creative director and storytelling expert.
 
-          Independently discover and choose one fascinating topic.
-          Do not ask the user for an idea.
+          Independently choose one fascinating, surprising, accurate
+          and emotionally engaging topic for an English YouTube Short.
 
-          Choose topics with strong viewer appeal:
+          Topics can include:
           - Strange but true facts
-          - Hidden stories behind ordinary things
           - Science and nature mysteries
           - Historical events
           - Human psychology
           - Space and the universe
+          - Hidden stories behind ordinary things
           - Surprising real-world discoveries
 
           Avoid generic motivational content and overused topics.
 
-          Write a compelling documentary-style narration.
+          Write a professional documentary-style narration.
 
-          STRICT REQUIREMENTS:
+          REQUIREMENTS:
           - Exactly 55 to 65 spoken English words.
-          - Start with a powerful curiosity-driven hook.
+          - A powerful opening hook.
+          - Natural conversational English.
+          - Calm, meaningful and impactful storytelling.
           - Every sentence must add useful information.
-          - Use natural, clear conversational English.
-          - Calm, deep, meaningful storytelling.
           - Build curiosity throughout the narration.
-          - End with a memorable final thought.
-          - No greetings or unnecessary introductions.
-          - Never invent facts or present speculation as fact.
+          - A memorable ending.
+          - No unnecessary introductions.
+          - Avoid unsupported claims.
 
           Create exactly 5 visual scenes in chronological order.
 
-          Scene requirements:
-          - Each scene must visually match its narration segment.
-          - Use specific realistic footage search phrases.
-          - Prefer concrete subjects, actions and environments.
-          - Avoid vague queries such as "beautiful background".
-          - Avoid repeating the same visual idea.
-          - Make queries suitable for Pixabay stock videos.
+          Each scene must have a specific Pixabay video search query
+          matching its corresponding narration segment.
 
-          Return ONLY valid JSON in this exact structure:
+          Scene queries must:
+          - Describe concrete visual subjects and actions.
+          - Be suitable for realistic stock footage.
+          - Avoid vague or abstract descriptions.
+          - Avoid repeating the same visual idea.
+
+          Return ONLY valid JSON:
 
           {
             "title": "Short title",
@@ -139,7 +140,7 @@ jobs:
                   message = response.text[:3000]
                   print("Gemini HTTP status:", response.status_code)
 
-                  if response.status_code in (401, 403, 400):
+                  if response.status_code in (400, 401, 403):
                       raise RuntimeError(
                           "Gemini rejected the request: " + message
                       )
@@ -209,7 +210,9 @@ jobs:
                   time.sleep(wait)
 
           if response is None or response.status_code != 200:
-              raise RuntimeError("Gemini did not return a successful response.")
+              raise RuntimeError(
+                  "Gemini did not return a successful response."
+              )
 
           try:
               data = response.json()
@@ -283,6 +286,7 @@ jobs:
           import os
           import requests
           import time
+          import subprocess
 
           with open("plan.json", encoding="utf-8") as f:
               plan = json.load(f)
@@ -340,10 +344,6 @@ jobs:
               output = f"scenes/scene{i}.mp4"
               print("Downloading scene", i)
 
-              # curl is used because it worked in the earlier
-              # successful Pixabay download test.
-              import subprocess
-
               subprocess.run([
                   "curl",
                   "-fL",
@@ -388,13 +388,33 @@ jobs:
 
           python - <<'PY'
           import re
-          import textwrap
+
+          def to_ms(value):
+              h, m, rest = value.split(":")
+              s, ms = rest.split(",")
+              return (
+                  int(h) * 3600000 +
+                  int(m) * 60000 +
+                  int(s) * 1000 +
+                  int(ms)
+              )
+
+          def to_timestamp(ms):
+              ms = max(0, ms)
+              h = ms // 3600000
+              ms %= 3600000
+              m = ms // 60000
+              ms %= 60000
+              s = ms // 1000
+              ms %= 1000
+              return f"{h:02}:{m:02}:{s:02},{ms:03}"
 
           with open("captions.srt", encoding="utf-8") as f:
               content = f.read().strip()
 
           blocks = re.split(r"\n\s*\n", content)
           output = []
+          counter = 1
 
           for block in blocks:
               lines = block.strip().splitlines()
@@ -402,30 +422,104 @@ jobs:
               if len(lines) < 3:
                   continue
 
-              number = lines[0].strip()
-              timestamp = lines[1].strip()
+              match = re.search(
+                  r"(\d{2}:\d{2}:\d{2},\d{3})\s*-->\s*"
+                  r"(\d{2}:\d{2}:\d{2},\d{3})",
+                  lines[1]
+              )
+
+              if not match:
+                  continue
+
+              start = to_ms(match.group(1))
+              end = to_ms(match.group(2))
               text = " ".join(lines[2:]).strip()
 
-              wrapped = textwrap.wrap(
-                  text,
-                  width=24,
-                  break_long_words=False,
-                  break_on_hyphens=False
-              )
+              if not text or end <= start:
+                  continue
 
-              output.append(
-                  number + "\n" +
-                  timestamp + "\n" +
-                  "\n".join(wrapped) + "\n"
-              )
+              words = text.split()
+              chunks = []
+              current = []
+
+              for word in words:
+                  test = " ".join(current + [word])
+
+                  if len(test) > 30 and current:
+                      chunks.append(current)
+                      current = [word]
+                  else:
+                      current.append(word)
+
+              if current:
+                  chunks.append(current)
+
+              # Maximum 12 words per caption.
+              final_chunks = []
+
+              for chunk in chunks:
+                  for i in range(0, len(chunk), 12):
+                      final_chunks.append(chunk[i:i+12])
+
+              weights = [len(chunk) for chunk in final_chunks]
+              total_weight = sum(weights)
+              duration = end - start
+              elapsed = 0
+
+              for index, chunk in enumerate(final_chunks):
+                  chunk_start = start + elapsed
+
+                  if index == len(final_chunks) - 1:
+                      chunk_end = end
+                  else:
+                      part = round(
+                          duration * weights[index] / total_weight
+                      )
+                      elapsed += part
+                      chunk_end = start + elapsed
+
+                  phrase = " ".join(chunk)
+
+                  # Keep each caption to at most two lines.
+                  caption_lines = []
+                  current_line = ""
+
+                  for word in chunk:
+                      candidate = (
+                          current_line + " " + word
+                      ).strip()
+
+                      if len(candidate) > 30 and current_line:
+                          caption_lines.append(current_line)
+                          current_line = word
+                      else:
+                          current_line = candidate
+
+                  if current_line:
+                      caption_lines.append(current_line)
+
+                  if len(caption_lines) > 2:
+                      raise RuntimeError(
+                          "Subtitle exceeded two lines."
+                      )
+
+                  output.append(
+                      f"{counter}\n"
+                      f"{to_timestamp(chunk_start)} --> "
+                      f"{to_timestamp(chunk_end)}\n"
+                      f"{chr(10).join(caption_lines)}"
+                  )
+
+                  counter += 1
 
           if not output:
-              raise RuntimeError("Subtitle file is empty.")
+              raise RuntimeError("No valid subtitles generated.")
 
           with open("captions.srt", "w", encoding="utf-8") as f:
-              f.write("\n".join(output))
+              f.write("\n\n".join(output) + "\n")
 
           print("Subtitle formatting completed.")
+          print("Caption blocks:", len(output))
           PY
 
       - name: Create five-scene video
@@ -496,7 +590,7 @@ jobs:
           ffmpeg -y \
             -i joined.mp4 \
             -i voice.mp3 \
-            -vf "subtitles=captions.srt:force_style='FontName=DejaVu Sans,FontSize=38,Bold=1,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=3,Shadow=1,Alignment=2,MarginL=120,MarginR=120,MarginV=280,WrapStyle=2'" \
+            -vf "subtitles=captions.srt:force_style='FontName=DejaVu Sans,FontSize=28,Bold=1,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginL=150,MarginR=150,MarginV=300,WrapStyle=2'" \
             -map 0:v:0 \
             -map 1:a:0 \
             -c:v libx264 \
